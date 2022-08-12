@@ -44,17 +44,18 @@ def convert_x_to_bbox(x,score=None):
   """
   w = np.sqrt(x[2] * x[3])
   h = x[2] / w
-
-  print(f"w {w} h {h} x {x[0]} y {x[1]} s {x[2]} r {x[3]}")
   
   if(score==None):
     return np.array([x[0]-w/2., x[1]-h/2., x[0]+w/2., x[1]+h/2.]).reshape((1,4))
   else:
     return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.,score]).reshape((1,5))
 
-
-def draw_rectangle(img, x1, y1, x2, y2, thickness):
-    return cv2.rectangle(img, (x1, y1), (x2, y2), (0,0,0), thickness)
+def draw_rectangle(img, x1, y1, x2, y2, thickness, id, text_pos, color=(0,0,0)):
+  # random integer from 0 to 9
+  img = cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
+  img = cv2.putText(img, str(id), text_pos, cv2.FONT_HERSHEY_PLAIN, 3, color, 2)
+  
+  return img
 
 def euclidianDistance(x0, y0, x1, y1):
     return math.sqrt(math.pow(x0-x1,2)+math.pow(y0-x1,2))
@@ -90,7 +91,7 @@ def set_dataset(path, config):
     frame_path = [f for f in listdir(path_frames) if isfile(join(path_frames, f))]
     frame_path.sort()
 
-    path_detections = os.path.join(path, 'det', 'det.txt')
+    path_detections = os.path.join(path, 'gt', 'gt.txt')
     seq_dets = np.loadtxt(path_detections, delimiter=',')
 
     return seq_dets, path_frames, frame_path

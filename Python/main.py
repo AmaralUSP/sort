@@ -1,11 +1,3 @@
-# !mkdir -p /data/sets/nuscenes  # Make the directory to store the nuScenes dataset in.
-
-# !wget https://www.nuscenes.org/data/v1.0-mini.tgz  # Download the nuScenes mini split.
-
-# !tar -xf v1.0-mini.tgz -C /data/sets/nuscenes  # Uncompress the nuScenes mini split.
-
-# !pip install nuscenes-devkit &> /dev/null  # Install nuScenes.
-
 import os
 import utils
 import configparser
@@ -28,6 +20,7 @@ def main():
     config.sections()
 
     anns, path_frames, frame_path = utils.set_dataset(path, config)
+    anns = anns[anns[:, 0].argsort()]
 
     # args = parse_args()
     # if args.setup == True:
