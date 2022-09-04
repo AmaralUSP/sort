@@ -1,11 +1,8 @@
-from nis import match
 import cv2
 import os
 import numpy as np
-from scipy.optimize import linear_sum_assignment
-from soupsieve import select
 from tqdm import tqdm
-from KalmanObject import KalmanObject
+from UnscentedKalmanObject import KalmanObject
 import utils
 
 MIN_ASSOCIATIONS = 2
@@ -56,7 +53,11 @@ class SORT:
             else:
                 match.append([m[0], self.objTracker[m[1]].unique_id])
 
-        match = np.asarray(match)
+        if(len(match)==0):
+            match = np.empty((0,2),dtype=int)
+        else:
+            match = np.asarray(match)
+
         unmatch_dets = np.asarray(unmatch_dets)
         unmatch_trks = np.asarray(unmatch_trks)
 
@@ -110,8 +111,8 @@ class SORT:
                     metrics["IDSW"] += 1
             else:
                 id_gt[ids[d[0]]] = [d[1]]
-                
-        print(matched_index.shape, np.shape(ids))
+
+
     def calculate_fp_fn(self, metrics, unmatch_dets, matched_index, dets):
         # fp
         for obj in self.objTracker:
@@ -119,17 +120,36 @@ class SORT:
                 metrics["FP"] += 1
 
         # fn
-        for d, i in enumerate(dets):
-            if (d not in matched_index[:, 1]) and (d not in unmatch_dets):
+        for d, i in enumerate(unmatch_dets):
+            if (d not in matched_index[:, 0]):
                 metrics["FN"] += 1
 
         metrics["GT"] += len(dets)
-            
+
+    def calculate_MOTP(self, bbox_gt, matched_index):
+        unique_ids = [o.unique_id for o in self.objTracker]
+        MOTP = 0
+
+        for m in matched_index:
+            id = np.where(unique_ids == m[1])[0][0] 
+            iou = utils.iou_batch(
+                [bbox_gt[m[0]]], 
+                [utils.convert_x_to_bbox(self.objTracker[id].getState())]
+            )
+
+            MOTP += (1 - np.squeeze(iou))
+        
+        if len(matched_index) == 0:
+            MOTP = 0
+        else:
+            MOTP /= len(matched_index)
+
+        return MOTP
 
     def valid_obs(self, det):
         return self.calculate_area(det) > 2500
 
-    def track(self, anns, path_frames, frame_path):
+    def track(self, anns, path_frames, frame_path, curr_scene_path):
         '''
         Params:
         dets - a numpy array of detections in the format [[x1,y1,x2,y2,score],[x1,y1,x2,y2,score],...]
@@ -138,20 +158,22 @@ class SORT:
         '''
 
         current_obj = 0
-        metrics = {"FP" : 0, "FN" : 0, "IDSW" : 0, "MOTA" : 0, "GT" : 0}
+        metrics = {"FP" : 0, "FN" : 0, "IDSW" : 0, "MOTA" : 0, "GT" : 0, "MOTP" : 0}
         id_gt = {}
 
         for frame_num, frame in tqdm(enumerate(frame_path[:-1], 1), total=len(frame_path[:-1])):    
             # ajusta a lista de detecoes para o formato pasimra o Kalman (Utils method)
             dets = [] # deteccoes
             ids = []
+            bbox_gt = []
 
-            img = cv2.imread(os.path.join(path_frames, frame))
+            # img = cv2.imread(os.path.join(path_frames, frame))
 
             while anns[current_obj][0] == frame_num:
                 without_noise = np.array(anns[current_obj][2:6])
 
                 if self.valid_obs(without_noise):
+                    bbox_gt.append(without_noise)
                     with_noise = without_noise + np.random.normal(0, 1, without_noise.shape)
                     dets.append(with_noise)
                     ids.append(anns[current_obj][1])
@@ -159,6 +181,7 @@ class SORT:
                 current_obj = current_obj + 1
 
             dets = utils.anns_2_motion_model(dets)
+            bbox_gt = utils.anns_2_motion_model(bbox_gt)
 
             if len(self.objTracker) == 0:
                 for curr_track in dets:
@@ -167,9 +190,9 @@ class SORT:
                         self.objTracker.append(KalmanObject(2, 500, init_pos, self.count))
                         self.count = self.count + 1
 
-                img = self.__show_frame(img)
+                # img = self.__show_frame(img)
 
-                cv2.imwrite(f"cena/{frame_num}.png", img)
+                # cv2.imwrite(f"{curr_scene_path}/{frame_num}.png", img)
                 continue
 
             to_del = []
@@ -190,18 +213,23 @@ class SORT:
             for x in self.objTracker:
                 objs.append(utils.convert_x_to_bbox(x.getState()))
 
-            objs = np.concatenate(objs, axis=0)
+            if len(objs) > 0:
+                objs = np.concatenate(objs, axis=0)
 
-            matched_index, unmatch_dets, unmatch_trks = self.__associateObjects(objs, dets)
+                matched_index, unmatch_dets, unmatch_trks = self.__associateObjects(objs, dets)
             
-            self.calculate_idsw(matched_index, ids, id_gt, metrics)
-            self.__update(matched_index, unmatch_dets, dets)
-            # self.calculate_fp_fn(metrics, unmatch_dets, matched_index, dets)
+                self.calculate_idsw(matched_index, ids, id_gt, metrics)
+                self.__update(matched_index, unmatch_dets, dets)
+                self.calculate_fp_fn(metrics, unmatch_dets, matched_index, dets)
+                metrics["MOTP"] += self.calculate_MOTP(bbox_gt, matched_index)
 
-            print(metrics)
+            # img = self.__show_frame_gt(dets, ids, img)
+            # img = self.__show_frame(img)
 
-            img = self.__show_frame_gt(dets, ids, img)
-            img = self.__show_frame(img)
+            # cv2.imwrite(f"{curr_scene_path}/{frame_num}.png", img)
 
-            cv2.imwrite(f"cena/{frame_num}.png", img)
+        metrics["MOTP"] /= len(frame_path[:-1])
+        metrics["MOTA"] = 1 - (metrics["IDSW"]+metrics["FN"]+metrics["FP"])/float(metrics["GT"])
+
+        return metrics
 
